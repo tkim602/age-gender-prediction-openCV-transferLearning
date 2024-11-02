@@ -15,7 +15,7 @@ GENDER_LIST = ['Male', 'Female']
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 #image to predict
-image = cv2.imread('')
+image = cv2.imread('images/1.jpg')
 gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
 
