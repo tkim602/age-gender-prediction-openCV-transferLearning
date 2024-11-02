@@ -1,4 +1,4 @@
-# Age and Gender Prediction
+# Face Recognition and Age and Gender Prediction
 
 This project is an age and gender prediction tool that uses OpenCV's Haar Cascade Classifier for face detection and a pre-trained model to estimate age and gender based on detected faces. Currently, the project leverages Caffe-based deep learning models for age and gender classification, and OpenCV for image processing and face detection.
 
