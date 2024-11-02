@@ -14,8 +14,11 @@ GENDER_LIST = ['Male', 'Female']
 
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-image = cv2.imread('sample1.jpg')
+#image to predict
+image = cv2.imread('')
 gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+
 
 #scaleFactor: samller scale means more scales to be detectedb (slower but more precise)
 faces_large = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=8, minSize=(60, 60))
@@ -39,16 +42,18 @@ for (x, y, w, h) in all_faces:
     gender_net.setInput(blob)
     gender_preds = gender_net.forward()
     gender = GENDER_LIST[gender_preds[0].argmax()]
+    gender_confidence = gender_preds[0].max()
 
     age_net.setInput(blob)
     age_preds = age_net.forward()
     age = AGE_LIST[age_preds[0].argmax()]
+    age_confidence = age_preds[0].max()
+    
+    if gender_confidence > 0.75 and age_confidence > 0.75:
+        label = f"{gender}, {age}"
+        cv2.rectangle(image, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        cv2.putText(image, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-    label = f"{gender}, {age}"
-    cv2.rectangle(image, (x, y), (x+w, y+h), (0, 255, 0), 2)
-    cv2.putText(image, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-
-# Show result
 cv2.imshow('Age and Gender Prediction', image)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
