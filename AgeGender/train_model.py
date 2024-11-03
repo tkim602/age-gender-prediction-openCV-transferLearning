@@ -1,9 +1,24 @@
 import tensorflow as tf
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.preprocessing.image import ImageDataGenerator, load_img, img_to_array
 from tensorflow.keras.layers import Dense, GlobalAveragePooling2D
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.utils import to_categorical, Sequence
 import numpy as np
+import os
+
+# Define age mapping
+age_mapping = {
+    '(0, 2)': 0,
+    '(4, 6)': 1,
+    '(8, 12)': 2,
+    '(15, 20)': 3,
+    '(25, 32)': 4,
+    '(38, 43)': 5,
+    '(48, 53)': 6,
+    '(60, 100)': 7
+}
 
 # Load MobileNetV2 without the top layer
 base_model = tf.keras.applications.MobileNetV2(input_shape=(224, 224, 3),
@@ -15,67 +30,82 @@ base_model.trainable = False
 x = base_model.output
 x = GlobalAveragePooling2D()(x)
 
-# Gender output (binary classification: male or female)
-gender_output = Dense(2, activation='softmax', name='gender_output')(x)
+# Gender prediction output layer (binary classification for male and female)
+gender_output = Dense(1, activation='sigmoid', name='gender_output')(x)
 
-# Age output (multi-class classification for different age ranges)
-age_output = Dense(8, activation='softmax', name='age_output')(x)  # Assuming 8 age groups
+# Age prediction output layer (8 age groups)
+age_output = Dense(8, activation='softmax', name='age_output')(x)  # 8 age groups
 
-# Define the new model
+# Define the new model using the base model's input and the two output layers
 model = Model(inputs=base_model.input, outputs=[gender_output, age_output])
 
-# Compile the model
-model.compile(optimizer=Adam(learning_rate=0.001),
-              loss={'gender_output': 'sparse_categorical_crossentropy',
-                    'age_output': 'sparse_categorical_crossentropy'},
-              metrics={'gender_output': 'accuracy', 'age_output': 'accuracy'})
+# Compile the model (optimizer, loss function, and metrics)
+model.compile(
+    optimizer=Adam(learning_rate=0.001),
+    loss=['binary_crossentropy', 'categorical_crossentropy'],
+    metrics=['accuracy', 'accuracy']
+)
 
-# Image data generator for training and validation
-train_datagen = ImageDataGenerator(rescale=1.0/255.0, validation_split=0.2)
+# Image data generator for training with data augmentation
+train_datagen = ImageDataGenerator(
+    rescale=1.0 / 255.0,
+    rotation_range=20,
+    width_shift_range=0.2,
+    height_shift_range=0.2,
+    shear_range=0.2,
+    zoom_range=0.2,
+    horizontal_flip=True,
+    fill_mode='nearest',
+    validation_split=0.2
+)
 
-# Custom Data Generator with debugging and validation
+# Custom data generator to handle age and gender labels
 def custom_data_generator(generator):
     while True:
-        # Load a batch of images
-        images = next(generator)
-        batch_size = images.shape[0]  # Number of images in the batch
-        
-        # Initialize lists for age and gender labels
+        images = []
         age_labels = []
         gender_labels = []
 
-        # Extract labels based on folder names
-        for path in generator.filepaths[generator.batch_index * generator.batch_size:(generator.batch_index + 1) * generator.batch_size]:
-            parts = path.split('/')[-3:]  # Extract age and gender folder names
-            age_folder, gender_folder = parts[0], parts[1]
+        while len(images) < generator.batch_size:
+            try:
+                batch_images = next(generator)
+            except StopIteration:
+                generator.reset()
+                batch_images = next(generator)
+            
+            batch_start = generator.batch_index * generator.batch_size
+            batch_end = batch_start + generator.batch_size
+            paths = generator.filepaths[batch_start:batch_end]
 
-            # Assign age label based on folder name
-            age_mapping = {
-                '(0, 2)': 0, '(4, 6)': 1, '(8, 12)': 2,
-                '(15, 20)': 3, '(25, 32)': 4, '(38, 43)': 5,
-                '(48, 53)': 6, '(60, 100)': 7
-            }
-            age_labels.append(age_mapping.get(age_folder, -1))
+            for img, path in zip(batch_images, paths):
+                parts = path.split(os.path.sep)[-3:]
+                if len(parts) < 3:
+                    continue  # 폴더 구조가 잘못된 경우 건너뛰기
+                age_folder = parts[0]
+                gender_folder = parts[1].lower()
 
-            # Assign gender label based on folder name
-            gender_mapping = {'female': 0, 'male': 1}
-            gender_labels.append(gender_mapping.get(gender_folder, -1))
+                age = age_mapping.get(age_folder, -1)
+                gender = 0 if gender_folder == 'female' else 1 if gender_folder == 'male' else -1
 
-        # Convert labels to numpy arrays
-        age_labels = np.array(age_labels)
-        gender_labels = np.array(gender_labels)
+                if age == -1 or gender == -1:
+                    continue  # 유효하지 않은 라벨인 경우 건너뛰기
 
-        # Debugging: Print labels and validate range
-        print("Debug - Age Labels:", age_labels)
-        print("Debug - Gender Labels:", gender_labels)
-        
-        # Validation - Check if labels are within expected range
-        if any(g < 0 or g > 1 for g in gender_labels):
-            raise ValueError("Gender label out of bounds detected.")
-        if any(a < 0 or a > 7 for a in age_labels):
-            raise ValueError("Age label out of bounds detected.")
+                images.append(img)
+                age_labels.append(age)
+                gender_labels.append(gender)
 
-        yield images, {'gender_output': gender_labels, 'age_output': age_labels}
+                if len(images) == generator.batch_size:
+                    break
+
+        age_labels = np.array(age_labels, dtype='int32')
+        gender_labels = np.array(gender_labels, dtype='float32').reshape(-1, 1)
+        age_labels = to_categorical(age_labels, num_classes=8).astype('float32')
+
+        # 디버그 정보 출력
+        print("Debug - Age Labels Shape:", age_labels.shape, "Data type:", age_labels.dtype)
+        print("Debug - Gender Labels Shape:", gender_labels.shape, "Data type:", gender_labels.dtype)
+
+        yield np.array(images), (gender_labels, age_labels)
 
 # Training generator
 train_generator = train_datagen.flow_from_directory(
@@ -101,13 +131,19 @@ validation_generator = train_datagen.flow_from_directory(
 train_gen = custom_data_generator(train_generator)
 val_gen = custom_data_generator(validation_generator)
 
-# Train the model
+# Early stopping callback
+early_stopping = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
+
+model.summary() 
+
+# Train the model with both age and gender labels
 history = model.fit(
     train_gen,
     validation_data=val_gen,
     epochs=10,
     steps_per_epoch=train_generator.samples // train_generator.batch_size,
-    validation_steps=validation_generator.samples // validation_generator.batch_size
+    validation_steps=validation_generator.samples // validation_generator.batch_size,
+    callbacks=[early_stopping]
 )
 
 # Save the trained model
