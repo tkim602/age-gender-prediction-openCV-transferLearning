@@ -3,26 +3,23 @@ from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.layers import Dense, GlobalAveragePooling2D
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
-import os
+import numpy as np
 
 # Load MobileNetV2 without the top layer
 base_model = tf.keras.applications.MobileNetV2(input_shape=(224, 224, 3),
                                                include_top=False,
                                                weights='imagenet')
-
-# Freeze the base model to retain pre-trained weights
 base_model.trainable = False
 
 # Add new layers for age and gender prediction
 x = base_model.output
 x = GlobalAveragePooling2D()(x)
 
-# Gender output
+# Gender output (binary classification: male or female)
 gender_output = Dense(2, activation='softmax', name='gender_output')(x)
 
-# Age output
-age_output = Dense(len(['(0-2)', '(4-6)', '(8-12)', '(15-20)', '(25-32)', '(38-43)', '(48-53)', '(60-100)']),
-                   activation='softmax', name='age_output')(x)
+# Age output (multi-class classification for different age ranges)
+age_output = Dense(8, activation='softmax', name='age_output')(x)  # Assuming 8 age groups
 
 # Define the new model
 model = Model(inputs=base_model.input, outputs=[gender_output, age_output])
@@ -33,33 +30,84 @@ model.compile(optimizer=Adam(learning_rate=0.001),
                     'age_output': 'sparse_categorical_crossentropy'},
               metrics={'gender_output': 'accuracy', 'age_output': 'accuracy'})
 
-# Image data generators for training and validation (Adience 데이터셋 경로 지정 필요)
+# Image data generator for training and validation
 train_datagen = ImageDataGenerator(rescale=1.0/255.0, validation_split=0.2)
-train_generator = train_datagen.flow_from_directory(
-    'path_to_adience_data',  # 이 경로를 Adience 데이터셋 위치로 변경하세요.
-    target_size=(224, 224),
-    batch_size=32,
-    class_mode='sparse',
-    subset='training',
-    classes=['male', 'female'],  # 성별을 분류할 클래스 추가
-    seed=42)
 
-validation_generator = train_datagen.flow_from_directory(
-    'path_to_adience_data',  # 이 경로를 Adience 데이터셋 위치로 변경하세요.
+# Custom Data Generator with debugging and validation
+def custom_data_generator(generator):
+    while True:
+        # Load a batch of images
+        images = next(generator)
+        batch_size = images.shape[0]  # Number of images in the batch
+        
+        # Initialize lists for age and gender labels
+        age_labels = []
+        gender_labels = []
+
+        # Extract labels based on folder names
+        for path in generator.filepaths[generator.batch_index * generator.batch_size:(generator.batch_index + 1) * generator.batch_size]:
+            parts = path.split('/')[-3:]  # Extract age and gender folder names
+            age_folder, gender_folder = parts[0], parts[1]
+
+            # Assign age label based on folder name
+            age_mapping = {
+                '(0, 2)': 0, '(4, 6)': 1, '(8, 12)': 2,
+                '(15, 20)': 3, '(25, 32)': 4, '(38, 43)': 5,
+                '(48, 53)': 6, '(60, 100)': 7
+            }
+            age_labels.append(age_mapping.get(age_folder, -1))
+
+            # Assign gender label based on folder name
+            gender_mapping = {'female': 0, 'male': 1}
+            gender_labels.append(gender_mapping.get(gender_folder, -1))
+
+        # Convert labels to numpy arrays
+        age_labels = np.array(age_labels)
+        gender_labels = np.array(gender_labels)
+
+        # Debugging: Print labels and validate range
+        print("Debug - Age Labels:", age_labels)
+        print("Debug - Gender Labels:", gender_labels)
+        
+        # Validation - Check if labels are within expected range
+        if any(g < 0 or g > 1 for g in gender_labels):
+            raise ValueError("Gender label out of bounds detected.")
+        if any(a < 0 or a > 7 for a in age_labels):
+            raise ValueError("Age label out of bounds detected.")
+
+        yield images, {'gender_output': gender_labels, 'age_output': age_labels}
+
+# Training generator
+train_generator = train_datagen.flow_from_directory(
+    'organized_data',
     target_size=(224, 224),
     batch_size=32,
-    class_mode='sparse',
+    class_mode=None,
+    subset='training',
+    seed=42
+)
+
+# Validation generator
+validation_generator = train_datagen.flow_from_directory(
+    'organized_data',
+    target_size=(224, 224),
+    batch_size=32,
+    class_mode=None,
     subset='validation',
-    classes=['male', 'female'],
-    seed=42)
+    seed=42
+)
+
+# Apply custom generator to separate labels
+train_gen = custom_data_generator(train_generator)
+val_gen = custom_data_generator(validation_generator)
 
 # Train the model
 history = model.fit(
-    train_generator,
-    validation_data=validation_generator,
+    train_gen,
+    validation_data=val_gen,
     epochs=10,
-    steps_per_epoch=100,
-    validation_steps=50
+    steps_per_epoch=train_generator.samples // train_generator.batch_size,
+    validation_steps=validation_generator.samples // validation_generator.batch_size
 )
 
 # Save the trained model
